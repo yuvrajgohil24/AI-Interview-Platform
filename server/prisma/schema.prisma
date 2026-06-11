@@ -25,6 +25,7 @@ model Session {
   targetQuestionCount Int @default(15)
   timeLimit Int      @default(30) // Minutes
   lifelineUsed Boolean @default(false)
+  currentQuestion String? // JSON of the in-flight question (kept server-side so the answer never reaches the client)
   status    String    @default("STARTED") // STARTED, COMPLETED, ABANDONED
   startTime DateTime  @default(now())
   endTime   DateTime?

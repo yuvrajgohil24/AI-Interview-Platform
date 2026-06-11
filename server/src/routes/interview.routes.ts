@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { verifyToken } from '../utils/auth';
-import { AIService } from '../services/ai.service';
+import { AIService, QuestionData } from '../services/ai.service';
 import { AdaptiveService } from '../services/adaptive.service';
 
 const router = Router();
@@ -17,6 +17,31 @@ const authenticate = (req: any, res: any, next: any) => {
   req.userId = decoded.userId;
   next();
 };
+
+// Fetch a session only if it belongs to the requesting user (prevents IDOR)
+const getOwnedSession = (sessionId: string, userId: string) =>
+  prisma.session.findFirst({
+    where: { id: sessionId, userId },
+    include: { attempts: true }
+  });
+
+// Strip the answer and explanation before the question leaves the server
+const sanitizeQuestion = (q: QuestionData) => ({
+  question: q.question,
+  options: q.options,
+  topic: q.topic,
+  subTopic: q.subTopic,
+  difficulty: q.difficulty
+});
+
+const isTimeExpired = (session: { startTime: Date, timeLimit: number }) =>
+  Date.now() - new Date(session.startTime).getTime() > session.timeLimit * 60 * 1000;
+
+const completeSession = (sessionId: string) =>
+  prisma.session.update({
+    where: { id: sessionId },
+    data: { status: "COMPLETED", endTime: new Date(), currentQuestion: null }
+  });
 
 router.post('/start', authenticate, async (req: any, res) => {
   try {
@@ -41,13 +66,19 @@ router.get('/:sessionId/next', authenticate, async (req: any, res) => {
   try {
     const { sessionId } = req.params;
 
-    // Get session context
-    const session = await prisma.session.findUnique({
-      where: { id: sessionId },
-      include: { attempts: true }
-    });
-
+    const session = await getOwnedSession(sessionId, req.userId);
     if (!session) return res.status(404).json({ error: "Session not found" });
+
+    // Check question-count and time limits; finalize server-side so abandoned
+    // or expired sessions don't linger in STARTED forever.
+    if (session.attempts.length >= session.targetQuestionCount) {
+      if (session.status !== "COMPLETED") await completeSession(sessionId);
+      return res.json({ completed: true, reason: "questions" });
+    }
+    if (isTimeExpired(session)) {
+      if (session.status !== "COMPLETED") await completeSession(sessionId);
+      return res.json({ completed: true, reason: "time" });
+    }
 
     const sortedAttempts = session.attempts.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     const lastAttempt = sortedAttempts[0] || null;
@@ -67,26 +98,33 @@ router.get('/:sessionId/next', authenticate, async (req: any, res) => {
     // Logic: Trigger focus if last question was skipped, UNLESS lifeline was just used
     let focusTopic = adaptiveService.shouldTriggerFocus(lastAttempt);
 
-    // Check if we reached the limit
-    if (session.attempts.length >= session.targetQuestionCount) {
-      return res.json({ completed: true });
+    // Reuse the in-flight question if one is pending (e.g. page refresh),
+    // otherwise generate a new one and store it server-side.
+    let question: QuestionData;
+    if (session.currentQuestion) {
+      question = JSON.parse(session.currentQuestion);
+    } else {
+      question = await aiService.generateQuestion({
+        domain: session.domain,
+        targetDifficulty: nextDiff,
+        topicFocus: focusTopic || undefined,
+        previousAttempts: session.attempts
+      });
+      await prisma.session.update({
+        where: { id: sessionId },
+        data: { currentQuestion: JSON.stringify(question) }
+      });
     }
 
-    const question = await aiService.generateQuestion({
-      domain: session.domain,
-      targetDifficulty: nextDiff,
-      topicFocus: focusTopic || undefined,
-      previousAttempts: session.attempts
-    });
-
     res.json({
-      question,
+      question: sanitizeQuestion(question),
       context: {
-        difficulty: nextDiff,
+        difficulty: question.difficulty,
         topic: focusTopic ? focusTopic : question.topic,
         isFocusedMode: !!focusTopic,
         progress: { current: session.attempts.length + 1, total: session.targetQuestionCount },
-        lifelineUsed: session.lifelineUsed
+        lifelineUsed: session.lifelineUsed,
+        timeLeftMs: Math.max(0, session.timeLimit * 60 * 1000 - (Date.now() - new Date(session.startTime).getTime()))
       }
     });
 
@@ -99,8 +137,14 @@ router.get('/:sessionId/next', authenticate, async (req: any, res) => {
 router.post('/:sessionId/submit', authenticate, async (req: any, res) => {
   try {
     const { sessionId } = req.params;
-    const { questionData, selectedOption, timeTaken, skipped } = req.body;
+    const { selectedOption, timeTaken, skipped } = req.body;
 
+    const session = await getOwnedSession(sessionId, req.userId);
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    if (!session.currentQuestion) return res.status(400).json({ error: "No question pending" });
+
+    // Grade against the server-side copy — the client never sees the answer
+    const questionData: QuestionData = JSON.parse(session.currentQuestion);
     const isCorrect = !skipped && selectedOption === questionData.correctOption;
 
     await prisma.attempt.create({
@@ -113,8 +157,14 @@ router.post('/:sessionId/submit', authenticate, async (req: any, res) => {
         selectedOption: selectedOption || null,
         isCorrect,
         skipped: !!skipped,
-        timeTaken
+        timeTaken: typeof timeTaken === 'number' ? timeTaken : 0
       }
+    });
+
+    // Clear the pending question so /next generates a fresh one
+    await prisma.session.update({
+      where: { id: sessionId },
+      data: { currentQuestion: null }
     });
 
     res.json({ success: true, isCorrect, explanation: questionData.explanation });
@@ -127,24 +177,15 @@ router.post('/:sessionId/submit', authenticate, async (req: any, res) => {
 router.post('/:sessionId/lifeline/skip', authenticate, async (req: any, res) => {
   try {
     const { sessionId } = req.params;
-    const { questionData } = req.body;
 
-    const session = await prisma.session.findUnique({
-      where: { id: sessionId },
-      include: { attempts: true }
-    });
-
+    const session = await getOwnedSession(sessionId, req.userId);
     if (!session) return res.status(404).json({ error: "Session not found" });
     if (session.lifelineUsed) return res.status(400).json({ error: "Lifeline already used" });
 
-    // Mark lifeline used
-    await prisma.session.update({
-      where: { id: sessionId },
-      data: { lifelineUsed: true }
-    });
-
-    // Record this as a special skip attempt so it enters history
-    if (questionData) {
+    // Record the pending question as a special skip attempt so it enters history
+    // without triggering focus mode
+    if (session.currentQuestion) {
+      const questionData: QuestionData = JSON.parse(session.currentQuestion);
       await prisma.attempt.create({
         data: {
           sessionId,
@@ -160,6 +201,11 @@ router.post('/:sessionId/lifeline/skip', authenticate, async (req: any, res) => 
       });
     }
 
+    await prisma.session.update({
+      where: { id: sessionId },
+      data: { lifelineUsed: true, currentQuestion: null }
+    });
+
     res.json({ success: true, message: "Context skipped. Lifeline consumed." });
 
   } catch (error) {
@@ -170,26 +216,73 @@ router.post('/:sessionId/lifeline/skip', authenticate, async (req: any, res) => 
 router.post('/:sessionId/end', authenticate, async (req: any, res) => {
   try {
     const { sessionId } = req.params;
-    await prisma.session.update({
-      where: { id: sessionId },
-      data: {
-        status: "COMPLETED",
-        endTime: new Date()
-      }
-    });
+
+    const session = await prisma.session.findFirst({ where: { id: sessionId, userId: req.userId } });
+    if (!session) return res.status(404).json({ error: "Session not found" });
+
+    if (session.status !== "COMPLETED") await completeSession(sessionId);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: "Failed to end session" });
   }
 });
 
+// Aggregate stats for the dashboard: totals, average accuracy, daily streak
+router.get('/history', authenticate, async (req: any, res) => {
+  try {
+    const sessions = await prisma.session.findMany({
+      where: { userId: req.userId, status: "COMPLETED" },
+      include: { attempts: true },
+      orderBy: { startTime: 'desc' }
+    });
+
+    const sessionSummaries = sessions.map(s => {
+      const total = s.attempts.length;
+      const correct = s.attempts.filter(a => a.isCorrect).length;
+      return {
+        id: s.id,
+        domain: s.domain,
+        startTime: s.startTime,
+        totalQuestions: total,
+        correctAnswers: correct,
+        accuracy: total > 0 ? Math.round((correct / total) * 100) : 0
+      };
+    });
+
+    const graded = sessionSummaries.filter(s => s.totalQuestions > 0);
+    const avgAccuracy = graded.length > 0
+      ? Math.round(graded.reduce((sum, s) => sum + s.accuracy, 0) / graded.length)
+      : null;
+
+    // Streak: consecutive calendar days (ending today or yesterday) with >= 1 completed session
+    const dayKey = (d: Date) => {
+      const dt = new Date(d);
+      return `${dt.getFullYear()}-${dt.getMonth()}-${dt.getDate()}`;
+    };
+    const activeDays = new Set(sessions.map(s => dayKey(s.startTime)));
+    let streak = 0;
+    const cursor = new Date();
+    if (!activeDays.has(dayKey(cursor))) cursor.setDate(cursor.getDate() - 1); // streak survives until today is missed
+    while (activeDays.has(dayKey(cursor))) {
+      streak++;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+
+    res.json({
+      totalSessions: sessions.length,
+      avgAccuracy,
+      streak,
+      recentSessions: sessionSummaries.slice(0, 5)
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to load history" });
+  }
+});
+
 router.get('/:sessionId/report', authenticate, async (req: any, res) => {
   try {
     const { sessionId } = req.params;
-    const session = await prisma.session.findUnique({
-      where: { id: sessionId },
-      include: { attempts: true }
-    });
+    const session = await getOwnedSession(sessionId, req.userId);
 
     if (!session) return res.status(404).json({ error: "Session not found" });
 
@@ -254,4 +347,3 @@ router.get('/:sessionId/report', authenticate, async (req: any, res) => {
 });
 
 export default router;
-

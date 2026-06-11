@@ -74,3 +74,28 @@
     @apply bg-background text-foreground;
   }
 }
+
+@layer utilities {
+  /* Animated gradient text / backgrounds */
+  .animate-gradient-x {
+    background-size: 200% 200%;
+    animation: gradient-x 6s ease infinite;
+  }
+
+  /* Subtle dot-grid backdrop for dark sections */
+  .bg-grid-dark {
+    background-image: radial-gradient(circle, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  /* Subtle dot-grid backdrop for light sections */
+  .bg-grid-light {
+    background-image: radial-gradient(circle, rgba(99, 102, 241, 0.12) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+}
+
+@keyframes gradient-x {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}

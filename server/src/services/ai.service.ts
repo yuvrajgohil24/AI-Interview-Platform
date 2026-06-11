@@ -1,4 +1,5 @@
 import { Attempt } from '@prisma/client';
+import Anthropic from '@anthropic-ai/sdk';
 
 export interface QuestionData {
   question: string;
@@ -17,7 +18,7 @@ export interface GenerationContext {
   previousAttempts: Attempt[];
 }
 
-// Mock database of questions to simulate AI for development without API costs
+// Fallback bank used when ANTHROPIC_API_KEY is not configured or the API call fails
 const MOCK_QUESTIONS: Record<string, QuestionData[]> = {
   "IT": [
     {
@@ -398,11 +399,395 @@ const MOCK_QUESTIONS: Record<string, QuestionData[]> = {
       difficulty: 3,
       explanation: "Working capital measures a company's operational efficiency and short-term financial health."
     }
+  ],
+  "Marketing": [
+    {
+      question: "What are the '4 Ps' of the marketing mix?",
+      options: [
+        "Product, Price, Place, Promotion",
+        "People, Process, Profit, Position",
+        "Plan, Produce, Promote, Profit",
+        "Product, People, Price, Plan"
+      ],
+      correctOption: "A",
+      topic: "Marketing Fundamentals",
+      subTopic: "Marketing Mix",
+      difficulty: 1,
+      explanation: "The classic marketing mix consists of Product, Price, Place, and Promotion — the levers a marketer controls to influence demand."
+    },
+    {
+      question: "What does 'CTR' measure in digital marketing?",
+      options: [
+        "Cost To Revenue",
+        "The percentage of people who click a link after seeing it",
+        "Customer Trust Rating",
+        "Conversion Time Ratio"
+      ],
+      correctOption: "B",
+      topic: "Digital Marketing",
+      subTopic: "Metrics",
+      difficulty: 2,
+      explanation: "Click-Through Rate = clicks ÷ impressions. It indicates how compelling an ad or link is to its audience."
+    },
+    {
+      question: "What is a 'buyer persona'?",
+      options: [
+        "A legal contract with a customer",
+        "A semi-fictional profile of an ideal customer based on research",
+        "The person who approves marketing budgets",
+        "A loyalty program member"
+      ],
+      correctOption: "B",
+      topic: "Marketing Strategy",
+      subTopic: "Segmentation",
+      difficulty: 2,
+      explanation: "Buyer personas synthesize demographics, goals, and pain points of target customers so campaigns can be tailored to them."
+    },
+    {
+      question: "What is 'Customer Acquisition Cost' (CAC)?",
+      options: [
+        "The lifetime revenue from a customer",
+        "The total sales and marketing spend divided by new customers gained",
+        "The cost of retaining an existing customer",
+        "The price a customer pays for the product"
+      ],
+      correctOption: "B",
+      topic: "Marketing Analytics",
+      subTopic: "Metrics",
+      difficulty: 3,
+      explanation: "CAC tells you how much it costs on average to win one new customer; it is usually compared against customer lifetime value (LTV)."
+    },
+    {
+      question: "Which strategy focuses on creating valuable content to attract customers rather than interrupting them?",
+      options: ["Outbound marketing", "Inbound marketing", "Guerrilla marketing", "Direct selling"],
+      correctOption: "B",
+      topic: "Marketing Strategy",
+      subTopic: "Inbound",
+      difficulty: 2,
+      explanation: "Inbound marketing draws prospects in with content, SEO, and social media instead of pushing messages at them."
+    },
+    {
+      question: "What is 'A/B testing' used for?",
+      options: [
+        "Testing two suppliers against each other",
+        "Comparing two versions of an asset to see which performs better",
+        "Auditing brand awareness",
+        "Benchmarking against competitors"
+      ],
+      correctOption: "B",
+      topic: "Marketing Analytics",
+      subTopic: "Experimentation",
+      difficulty: 2,
+      explanation: "A/B testing splits the audience between variants (e.g. two headlines) and measures which converts better."
+    },
+    {
+      question: "What does 'positioning' mean in marketing?",
+      options: [
+        "Where the product sits on a store shelf",
+        "How a brand occupies a distinct place in the customer's mind relative to competitors",
+        "The order of ads in a campaign",
+        "The geographic markets a company serves"
+      ],
+      correctOption: "B",
+      topic: "Marketing Strategy",
+      subTopic: "Positioning",
+      difficulty: 3,
+      explanation: "Positioning defines the unique value and associations a brand wants customers to recall versus alternatives."
+    },
+    {
+      question: "What is a 'conversion funnel'?",
+      options: [
+        "A tool for pouring liquids",
+        "The staged journey from awareness to purchase, narrowing at each step",
+        "A spreadsheet of leads",
+        "A channel for customer complaints"
+      ],
+      correctOption: "B",
+      topic: "Digital Marketing",
+      subTopic: "Funnels",
+      difficulty: 3,
+      explanation: "The funnel models how a large audience narrows through interest, consideration, and intent into actual buyers, exposing drop-off points."
+    },
+    {
+      question: "What is 'SEO'?",
+      options: [
+        "Social Engagement Optimization",
+        "Search Engine Optimization — improving visibility in organic search results",
+        "Sales Efficiency Operations",
+        "Sponsored Email Outreach"
+      ],
+      correctOption: "B",
+      topic: "Digital Marketing",
+      subTopic: "SEO",
+      difficulty: 1,
+      explanation: "SEO is the practice of optimizing content and site structure so pages rank higher in unpaid search engine results."
+    },
+    {
+      question: "What is 'churn rate'?",
+      options: [
+        "The rate at which new leads arrive",
+        "The percentage of customers who stop doing business with you over a period",
+        "The speed of content production",
+        "The ratio of ad spend to revenue"
+      ],
+      correctOption: "B",
+      topic: "Marketing Analytics",
+      subTopic: "Retention",
+      difficulty: 3,
+      explanation: "Churn measures customer loss; reducing churn is usually cheaper than acquiring replacement customers."
+    }
+  ],
+  "HR": [
+    {
+      question: "What is the primary purpose of an 'onboarding' process?",
+      options: [
+        "To evaluate whether to fire a new hire",
+        "To integrate new employees into the organization and make them productive quickly",
+        "To negotiate salary",
+        "To complete tax paperwork only"
+      ],
+      correctOption: "B",
+      topic: "Talent Management",
+      subTopic: "Onboarding",
+      difficulty: 1,
+      explanation: "Structured onboarding familiarizes new hires with culture, tools, and expectations, improving retention and time-to-productivity."
+    },
+    {
+      question: "What does 'attrition' refer to in HR?",
+      options: [
+        "Hiring multiple candidates at once",
+        "The gradual reduction of workforce through resignations and retirements",
+        "Performance-based promotions",
+        "Cross-department transfers"
+      ],
+      correctOption: "B",
+      topic: "Workforce Planning",
+      subTopic: "Attrition",
+      difficulty: 2,
+      explanation: "Attrition is workforce shrinkage that occurs naturally when departing employees are not replaced."
+    },
+    {
+      question: "What is a 'competency-based interview'?",
+      options: [
+        "An interview testing only technical certifications",
+        "An interview where candidates give examples of past behavior demonstrating specific skills",
+        "A timed written exam",
+        "An informal coffee chat"
+      ],
+      correctOption: "B",
+      topic: "Recruitment",
+      subTopic: "Interviewing",
+      difficulty: 2,
+      explanation: "Competency interviews use the premise that past behavior predicts future performance, probing real examples (the STAR method)."
+    },
+    {
+      question: "What is the purpose of a 'performance appraisal'?",
+      options: [
+        "To calculate office rent",
+        "To formally evaluate an employee's job performance and guide development",
+        "To assign parking spots",
+        "To plan company events"
+      ],
+      correctOption: "B",
+      topic: "Performance Management",
+      subTopic: "Appraisals",
+      difficulty: 1,
+      explanation: "Appraisals review achievements against goals, inform compensation and promotion decisions, and identify development needs."
+    },
+    {
+      question: "What does 'employer branding' mean?",
+      options: [
+        "Printing logos on office supplies",
+        "Shaping the company's reputation as a place to work to attract talent",
+        "Trademarking the company name",
+        "Advertising products to employees"
+      ],
+      correctOption: "B",
+      topic: "Recruitment",
+      subTopic: "Employer Brand",
+      difficulty: 3,
+      explanation: "A strong employer brand lowers hiring costs and attracts better-fit candidates by communicating culture and values."
+    },
+    {
+      question: "What is 'succession planning'?",
+      options: [
+        "Planning the company holiday calendar",
+        "Identifying and developing employees to fill key roles when they become vacant",
+        "Scheduling shift rotations",
+        "Outsourcing recruitment"
+      ],
+      correctOption: "B",
+      topic: "Workforce Planning",
+      subTopic: "Succession",
+      difficulty: 3,
+      explanation: "Succession planning protects business continuity by preparing internal talent for critical leadership and specialist positions."
+    },
+    {
+      question: "What is the difference between 'exempt' and 'non-exempt' employees (US labor law)?",
+      options: [
+        "Exempt employees are part-time, non-exempt are full-time",
+        "Non-exempt employees are entitled to overtime pay; exempt employees are not",
+        "Exempt employees pay no taxes",
+        "Non-exempt employees cannot be promoted"
+      ],
+      correctOption: "B",
+      topic: "HR Compliance",
+      subTopic: "Labor Law",
+      difficulty: 4,
+      explanation: "Under the FLSA, non-exempt workers must receive overtime (1.5x) beyond 40 hours/week, while exempt roles meeting salary/duty tests are excluded."
+    },
+    {
+      question: "What is 'eNPS'?",
+      options: [
+        "Electronic National Payroll System",
+        "Employee Net Promoter Score — how likely employees are to recommend the workplace",
+        "Employee Number Per Site",
+        "Enterprise New Position Strategy"
+      ],
+      correctOption: "B",
+      topic: "Employee Engagement",
+      subTopic: "Metrics",
+      difficulty: 3,
+      explanation: "eNPS asks employees how likely they are to recommend the company as a place to work, giving a quick engagement pulse."
+    },
+    {
+      question: "What is 'constructive dismissal'?",
+      options: [
+        "Firing an employee with helpful feedback",
+        "When an employer makes conditions so intolerable the employee is forced to resign",
+        "Dismissal during a probation period",
+        "Layoffs due to restructuring"
+      ],
+      correctOption: "B",
+      topic: "HR Compliance",
+      subTopic: "Employment Law",
+      difficulty: 4,
+      explanation: "Constructive dismissal treats a forced resignation as a termination, potentially exposing the employer to wrongful dismissal claims."
+    },
+    {
+      question: "What is the main goal of 'diversity and inclusion' initiatives?",
+      options: [
+        "Meeting legal quotas only",
+        "Building a workforce of varied backgrounds where everyone can contribute fully",
+        "Reducing salary costs",
+        "Standardizing employee behavior"
+      ],
+      correctOption: "B",
+      topic: "Culture",
+      subTopic: "D&I",
+      difficulty: 2,
+      explanation: "D&I aims for representation (diversity) plus an environment where different perspectives are genuinely valued (inclusion), which research links to better outcomes."
+    }
   ]
 };
 
+// JSON schema the model's answer must conform to (structured outputs)
+const QUESTION_SCHEMA = {
+  type: "object",
+  properties: {
+    question: { type: "string", description: "The interview question text" },
+    options: {
+      type: "array",
+      items: { type: "string" },
+      description: "Exactly 4 answer options, in order A, B, C, D, without letter prefixes"
+    },
+    correctOption: { type: "string", enum: ["A", "B", "C", "D"] },
+    topic: { type: "string", description: "Broad topic area, e.g. 'Data Structures'" },
+    subTopic: { type: "string", description: "Narrow sub-topic, e.g. 'Stacks'" },
+    difficulty: { type: "integer", description: "Difficulty level 1-5" },
+    explanation: { type: "string", description: "Why the correct answer is correct, 1-3 sentences" }
+  },
+  required: ["question", "options", "correctOption", "topic", "subTopic", "difficulty", "explanation"],
+  additionalProperties: false
+} as const;
+
+const DIFFICULTY_GUIDE: Record<number, string> = {
+  1: "Novice — basic definitions and fundamental concepts a beginner should know",
+  2: "Beginner — straightforward applied knowledge, slightly beyond definitions",
+  3: "Intermediate — requires connecting multiple concepts or practical experience",
+  4: "Advanced — nuanced scenarios, trade-offs, and edge cases a senior practitioner faces",
+  5: "Expert — deep specialist knowledge, subtle distinctions, hard real-world judgment calls"
+};
+
 export class AIService {
+  private client: Anthropic | null;
+  private model: string;
+
+  constructor() {
+    this.client = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
+    this.model = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8';
+    if (!this.client) {
+      console.warn('[ai] ANTHROPIC_API_KEY not set — using the built-in fallback question bank');
+    }
+  }
+
   async generateQuestion(context: GenerationContext): Promise<QuestionData> {
+    if (this.client) {
+      try {
+        return await this.generateWithClaude(context);
+      } catch (error) {
+        console.error('[ai] Claude generation failed, falling back to question bank:', error);
+      }
+    }
+    return this.pickFromBank(context);
+  }
+
+  private async generateWithClaude(context: GenerationContext): Promise<QuestionData> {
+    const previousQuestions = context.previousAttempts
+      .map(a => {
+        try { return JSON.parse(a.questionContent as string).question as string; }
+        catch { return null; }
+      })
+      .filter((q): q is string => !!q)
+      .slice(-30); // keep the prompt bounded on long sessions
+
+    const userPrompt = [
+      `Domain: ${context.domain}`,
+      `Target difficulty: ${context.targetDifficulty}/5 (${DIFFICULTY_GUIDE[context.targetDifficulty] || DIFFICULTY_GUIDE[3]})`,
+      context.topicFocus
+        ? `FOCUS MODE: the candidate is weak on "${context.topicFocus}". The question MUST be about this topic, approached from a different angle than before.`
+        : `Pick any topic relevant to a professional ${context.domain} interview. Vary topics across the session.`,
+      previousQuestions.length > 0
+        ? `Questions already asked this session (do NOT repeat or closely paraphrase any of them):\n${previousQuestions.map(q => `- ${q}`).join('\n')}`
+        : `This is the first question of the session.`,
+      `Generate one fresh multiple-choice question now.`
+    ].join('\n\n');
+
+    const response = await this.client!.messages.create({
+      model: this.model,
+      max_tokens: 2048,
+      system:
+        "You are an expert interviewer generating multiple-choice questions for a mock interview platform. " +
+        "Write original, specific, professionally relevant questions — never generic trivia. " +
+        "Exactly one option is correct; the three distractors must be plausible but clearly wrong to someone who knows the material. " +
+        "Randomize which letter holds the correct answer. " +
+        "The difficulty must genuinely match the requested level: level 5 questions should challenge a senior specialist, level 1 should suit a newcomer.",
+      messages: [{ role: "user", content: userPrompt }],
+      output_config: {
+        format: { type: "json_schema", schema: QUESTION_SCHEMA as unknown as Record<string, unknown> }
+      }
+    } as Anthropic.MessageCreateParamsNonStreaming);
+
+    const textBlock = response.content.find(
+      (b): b is Anthropic.TextBlock => b.type === "text"
+    );
+    if (!textBlock) throw new Error("No text block in model response");
+
+    const data = JSON.parse(textBlock.text) as QuestionData;
+
+    // Validate the essentials before trusting the payload
+    if (!data.question || !Array.isArray(data.options) || data.options.length !== 4) {
+      throw new Error("Generated question failed validation");
+    }
+    if (!["A", "B", "C", "D"].includes(data.correctOption)) {
+      throw new Error("Generated correctOption is invalid");
+    }
+
+    return { ...data, difficulty: context.targetDifficulty };
+  }
+
+  // Offline fallback: pick an unused question from the static bank
+  private pickFromBank(context: GenerationContext): QuestionData {
     const domainQuestions = MOCK_QUESTIONS[context.domain] || MOCK_QUESTIONS["IT"];
 
     // EXCLUDE PREVIOUSLY ASKED QUESTIONS first to know our true candidate pool
