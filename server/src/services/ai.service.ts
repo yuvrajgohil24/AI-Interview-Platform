@@ -1,4 +1,5 @@
 import { Attempt } from '@prisma/client';
+import Anthropic from '@anthropic-ai/sdk';
 
 export interface QuestionData {
   question: string;
@@ -17,7 +18,7 @@ export interface GenerationContext {
   previousAttempts: Attempt[];
 }
 
-// Mock database of questions to simulate AI for development without API costs
+// Fallback bank used when ANTHROPIC_API_KEY is not configured or the API call fails
 const MOCK_QUESTIONS: Record<string, QuestionData[]> = {
   "IT": [
     {
@@ -680,8 +681,113 @@ const MOCK_QUESTIONS: Record<string, QuestionData[]> = {
   ]
 };
 
+// JSON schema the model's answer must conform to (structured outputs)
+const QUESTION_SCHEMA = {
+  type: "object",
+  properties: {
+    question: { type: "string", description: "The interview question text" },
+    options: {
+      type: "array",
+      items: { type: "string" },
+      description: "Exactly 4 answer options, in order A, B, C, D, without letter prefixes"
+    },
+    correctOption: { type: "string", enum: ["A", "B", "C", "D"] },
+    topic: { type: "string", description: "Broad topic area, e.g. 'Data Structures'" },
+    subTopic: { type: "string", description: "Narrow sub-topic, e.g. 'Stacks'" },
+    difficulty: { type: "integer", description: "Difficulty level 1-5" },
+    explanation: { type: "string", description: "Why the correct answer is correct, 1-3 sentences" }
+  },
+  required: ["question", "options", "correctOption", "topic", "subTopic", "difficulty", "explanation"],
+  additionalProperties: false
+} as const;
+
+const DIFFICULTY_GUIDE: Record<number, string> = {
+  1: "Novice — basic definitions and fundamental concepts a beginner should know",
+  2: "Beginner — straightforward applied knowledge, slightly beyond definitions",
+  3: "Intermediate — requires connecting multiple concepts or practical experience",
+  4: "Advanced — nuanced scenarios, trade-offs, and edge cases a senior practitioner faces",
+  5: "Expert — deep specialist knowledge, subtle distinctions, hard real-world judgment calls"
+};
+
 export class AIService {
+  private client: Anthropic | null;
+  private model: string;
+
+  constructor() {
+    this.client = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
+    this.model = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8';
+    if (!this.client) {
+      console.warn('[ai] ANTHROPIC_API_KEY not set — using the built-in fallback question bank');
+    }
+  }
+
   async generateQuestion(context: GenerationContext): Promise<QuestionData> {
+    if (this.client) {
+      try {
+        return await this.generateWithClaude(context);
+      } catch (error) {
+        console.error('[ai] Claude generation failed, falling back to question bank:', error);
+      }
+    }
+    return this.pickFromBank(context);
+  }
+
+  private async generateWithClaude(context: GenerationContext): Promise<QuestionData> {
+    const previousQuestions = context.previousAttempts
+      .map(a => {
+        try { return JSON.parse(a.questionContent as string).question as string; }
+        catch { return null; }
+      })
+      .filter((q): q is string => !!q)
+      .slice(-30); // keep the prompt bounded on long sessions
+
+    const userPrompt = [
+      `Domain: ${context.domain}`,
+      `Target difficulty: ${context.targetDifficulty}/5 (${DIFFICULTY_GUIDE[context.targetDifficulty] || DIFFICULTY_GUIDE[3]})`,
+      context.topicFocus
+        ? `FOCUS MODE: the candidate is weak on "${context.topicFocus}". The question MUST be about this topic, approached from a different angle than before.`
+        : `Pick any topic relevant to a professional ${context.domain} interview. Vary topics across the session.`,
+      previousQuestions.length > 0
+        ? `Questions already asked this session (do NOT repeat or closely paraphrase any of them):\n${previousQuestions.map(q => `- ${q}`).join('\n')}`
+        : `This is the first question of the session.`,
+      `Generate one fresh multiple-choice question now.`
+    ].join('\n\n');
+
+    const response = await this.client!.messages.create({
+      model: this.model,
+      max_tokens: 2048,
+      system:
+        "You are an expert interviewer generating multiple-choice questions for a mock interview platform. " +
+        "Write original, specific, professionally relevant questions — never generic trivia. " +
+        "Exactly one option is correct; the three distractors must be plausible but clearly wrong to someone who knows the material. " +
+        "Randomize which letter holds the correct answer. " +
+        "The difficulty must genuinely match the requested level: level 5 questions should challenge a senior specialist, level 1 should suit a newcomer.",
+      messages: [{ role: "user", content: userPrompt }],
+      output_config: {
+        format: { type: "json_schema", schema: QUESTION_SCHEMA as unknown as Record<string, unknown> }
+      }
+    } as Anthropic.MessageCreateParamsNonStreaming);
+
+    const textBlock = response.content.find(
+      (b): b is Anthropic.TextBlock => b.type === "text"
+    );
+    if (!textBlock) throw new Error("No text block in model response");
+
+    const data = JSON.parse(textBlock.text) as QuestionData;
+
+    // Validate the essentials before trusting the payload
+    if (!data.question || !Array.isArray(data.options) || data.options.length !== 4) {
+      throw new Error("Generated question failed validation");
+    }
+    if (!["A", "B", "C", "D"].includes(data.correctOption)) {
+      throw new Error("Generated correctOption is invalid");
+    }
+
+    return { ...data, difficulty: context.targetDifficulty };
+  }
+
+  // Offline fallback: pick an unused question from the static bank
+  private pickFromBank(context: GenerationContext): QuestionData {
     const domainQuestions = MOCK_QUESTIONS[context.domain] || MOCK_QUESTIONS["IT"];
 
     // EXCLUDE PREVIOUSLY ASKED QUESTIONS first to know our true candidate pool
