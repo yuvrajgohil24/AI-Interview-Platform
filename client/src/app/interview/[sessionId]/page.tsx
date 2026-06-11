@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { motion, AnimatePresence } from "framer-motion"
 import api from "@/lib/api"
@@ -20,19 +20,15 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
     const [timeLeft, setTimeLeft] = useState(60)
     const [isSubmitting, setIsSubmitting] = useState(false)
 
-    // Lifeline state
-    const [showLifeline, setShowLifeline] = useState(false)
+    // Lifeline state — available once per session, any time (skipping with it never triggers focus mode)
     const [lifelineUsed, setLifelineUsed] = useState(false) // from API context
-
-    const timerRef = useRef<NodeJS.Timeout | null>(null)
 
     const fetchQuestion = useCallback(async () => {
         setLoading(true)
         try {
             const res = await api.get(`/interview/${sessionId}/next`)
-            // Check for completion
+            // Check for completion (question count reached or session time expired)
             if (res.data.completed) {
-                await api.post(`/interview/${sessionId}/end`)
                 router.push(`/report/${sessionId}`)
                 return
             }
@@ -40,7 +36,6 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
             setQuestionData(res.data.question)
             setContext(res.data.context)
             setLifelineUsed(res.data.context?.lifelineUsed || false)
-            setShowLifeline(res.data.context?.isFocusedMode && !res.data.context?.lifelineUsed) // Only allow skip context if IN focus mode
 
             setSelectedOption(null)
             setTimeLeft(60) // Reset timer
@@ -55,29 +50,23 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
         fetchQuestion()
     }, [fetchQuestion])
 
-    // Timer
+    // Timer — one tick per second; the auto-skip runs as an effect, not inside a state updater
     useEffect(() => {
-        if (loading || isSubmitting) return;
-        timerRef.current = setInterval(() => {
-            setTimeLeft(prev => {
-                if (prev <= 1) {
-                    handleSkip() // Auto skip
-                    return 0
-                }
-                return prev - 1
-            })
-        }, 1000)
-        return () => {
-            if (timerRef.current) clearInterval(timerRef.current)
+        if (loading || isSubmitting) return
+        if (timeLeft <= 0) {
+            handleSkip() // Auto skip when time runs out
+            return
         }
-    }, [loading, isSubmitting])
+        const tick = setTimeout(() => setTimeLeft(prev => prev - 1), 1000)
+        return () => clearTimeout(tick)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [timeLeft, loading, isSubmitting])
 
     const handleSubmit = async () => {
         if (!selectedOption) return
         setIsSubmitting(true)
         try {
             await api.post(`/interview/${sessionId}/submit`, {
-                questionData,
                 selectedOption,
                 timeTaken: 60 - timeLeft,
                 skipped: false
@@ -94,7 +83,6 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
         setIsSubmitting(true)
         try {
             await api.post(`/interview/${sessionId}/submit`, {
-                questionData,
                 selectedOption: null,
                 timeTaken: 60 - timeLeft,
                 skipped: true
@@ -108,12 +96,10 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
     }
 
     const handleLifeline = async () => {
-        if (!confirm("Use your one-time lifeline to skip this context?")) return
+        if (!confirm("Use your one-time lifeline to skip this question without triggering Focus Mode?")) return
         setIsSubmitting(true)
         try {
-            await api.post(`/interview/${sessionId}/lifeline/skip`, {
-                questionData
-            })
+            await api.post(`/interview/${sessionId}/lifeline/skip`)
             await fetchQuestion() // Refresh (will get new question)
         } catch (err) {
             alert("Failed to use lifeline")
@@ -216,11 +202,6 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
                                 <p className="font-bold">Focused Practice Mode Active</p>
                                 <p className="text-sm opacity-90">We&apos;re digging deeper into {context.topic} to help you master it.</p>
                             </div>
-                            {showLifeline && (
-                                <Button size="sm" variant="destructive" onClick={handleLifeline} className="whitespace-nowrap shrink-0 ml-4 shadow-sm hover:shadow-md transition-all">
-                                    <Zap className="w-4 h-4 mr-1" /> Use Lifeline
-                                </Button>
-                            )}
                         </motion.div>
                     )}
                 </AnimatePresence>
@@ -290,9 +271,23 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
                             </CardContent>
 
                             <CardFooter className="flex justify-between border-t p-6 bg-slate-50/30">
-                                <Button variant="ghost" size="lg" className="text-slate-500 hover:text-slate-700" onClick={() => handleSkip()}>
-                                    Skip Question
-                                </Button>
+                                <div className="flex items-center gap-2">
+                                    <Button variant="ghost" size="lg" className="text-slate-500 hover:text-slate-700" onClick={() => handleSkip()}>
+                                        Skip Question
+                                    </Button>
+                                    {!lifelineUsed && (
+                                        <Button
+                                            variant="outline"
+                                            size="lg"
+                                            onClick={handleLifeline}
+                                            disabled={isSubmitting}
+                                            className="border-amber-300 text-amber-700 hover:bg-amber-50 hover:text-amber-800 transition-all"
+                                            title="One-time skip that won't trigger Focus Mode"
+                                        >
+                                            <Zap className="w-4 h-4 mr-1 fill-amber-500 text-amber-500" /> Lifeline
+                                        </Button>
+                                    )}
+                                </div>
                                 <Button size="lg" className="min-w-[150px] text-lg shadow-lg hover:shadow-xl hover:translate-y-[-1px] transition-all bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500" onClick={handleSubmit} disabled={!selectedOption || isSubmitting}>
                                     {isSubmitting ? "Submitting..." : "Submit Answer"}
                                 </Button>

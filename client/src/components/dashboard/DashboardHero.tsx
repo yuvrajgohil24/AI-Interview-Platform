@@ -6,9 +6,11 @@ import { Sparkles, Zap } from "lucide-react"
 
 interface DashboardHeroProps {
     userName: string
+    onStartChallenge?: () => void
+    loading?: boolean
 }
 
-export function DashboardHero({ userName }: DashboardHeroProps) {
+export function DashboardHero({ userName, onStartChallenge, loading }: DashboardHeroProps) {
     return (
         <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-violet-600 to-indigo-600 p-8 md:p-12 text-white shadow-2xl">
             {/* Animated background orbs */}
@@ -66,10 +68,15 @@ export function DashboardHero({ userName }: DashboardHeroProps) {
                     transition={{ duration: 0.5, delay: 0.3 }}
                     className="flex flex-col gap-4 sm:flex-row shadow-sm"
                 >
-                    {/* CTA Button */}
-                    <Button size="lg" className="h-14 bg-white text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700 font-bold text-lg px-8 rounded-xl shadow-xl transition-all hover:scale-105 active:scale-95">
+                    {/* CTA Button — short, slightly harder session in the selected domain */}
+                    <Button
+                        size="lg"
+                        onClick={onStartChallenge}
+                        disabled={loading}
+                        className="h-14 bg-white text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700 font-bold text-lg px-8 rounded-xl shadow-xl transition-all hover:scale-105 active:scale-95"
+                    >
                         <Zap className="mr-2 h-5 w-5 fill-indigo-600" />
-                        Start Daily Challenge
+                        {loading ? "Starting..." : "Start Daily Challenge"}
                     </Button>
                 </motion.div>
             </div>

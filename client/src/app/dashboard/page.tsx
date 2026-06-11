@@ -22,9 +22,16 @@ const sectionVariants: Variants = {
   })
 }
 
+interface HistoryStats {
+  totalSessions: number
+  avgAccuracy: number | null
+  streak: number
+}
+
 export default function DashboardPage() {
   const router = useRouter()
   const [user, setUser] = useState<{ name: string } | null>(null)
+  const [stats, setStats] = useState<HistoryStats | null>(null)
 
   // Config state
   const [domain, setDomain] = useState("IT")
@@ -43,6 +50,13 @@ export default function DashboardPage() {
     }
   }, [router])
 
+  // Load real session stats for the cards
+  useEffect(() => {
+    api.get('/interview/history')
+      .then(res => setStats(res.data))
+      .catch(err => console.error("Failed to load history", err))
+  }, [])
+
   const applyQuickConfig = (config: { domain: string, difficulty: number, duration: number }) => {
     setDomain(config.domain)
     setDifficulty(config.difficulty)
@@ -51,14 +65,14 @@ export default function DashboardPage() {
     window.scrollTo({ top: 400, behavior: 'smooth' })
   }
 
-  const startInterview = async () => {
+  const startInterview = async (config?: { domain: string, difficulty: number, questionCount: number, duration: number }) => {
     setLoading(true)
     try {
       const res = await api.post('/interview/start', {
-        domain,
-        difficulty: difficulty.toString(),
-        questionCount: parseInt(questionCount),
-        duration: parseInt(duration)
+        domain: config?.domain ?? domain,
+        difficulty: (config?.difficulty ?? difficulty).toString(),
+        questionCount: config?.questionCount ?? parseInt(questionCount),
+        duration: config?.duration ?? parseInt(duration)
       })
       router.push(`/interview/${res.data.sessionId}`)
     } catch (error) {
@@ -68,6 +82,10 @@ export default function DashboardPage() {
       setLoading(false)
     }
   }
+
+  // Daily challenge: a short, slightly harder session in the currently selected domain
+  const startDailyChallenge = () =>
+    startInterview({ domain, difficulty: Math.min(5, difficulty + 1), questionCount: 5, duration: 10 })
 
   if (!user) return <div className="min-h-screen bg-slate-50" />
 
@@ -107,7 +125,7 @@ export default function DashboardPage() {
 
         {/* Hero Section */}
         <motion.div variants={sectionVariants} initial="hidden" animate="visible" custom={0}>
-          <DashboardHero userName={user.name.split(' ')[0]} />
+          <DashboardHero userName={user.name.split(' ')[0]} onStartChallenge={startDailyChallenge} loading={loading} />
         </motion.div>
 
         {/* Quick Actions */}
@@ -195,7 +213,7 @@ export default function DashboardPage() {
                 <Button
                   size="lg"
                   className="w-full text-lg h-12 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 transition-all hover:scale-[1.01] active:scale-[0.99] shadow-lg shadow-indigo-200"
-                  onClick={startInterview}
+                  onClick={() => startInterview()}
                   disabled={loading}
                 >
                   {loading ? "Initializing AI..." : "Begin Simulation"}
@@ -208,10 +226,18 @@ export default function DashboardPage() {
           <div className="space-y-6">
             {[
               {
-                title: "Total Sessions", icon: History, value: "0", note: "Ready to start?", custom: 3
+                title: "Total Sessions",
+                icon: History,
+                value: stats ? `${stats.totalSessions}` : "…",
+                note: stats && stats.totalSessions > 0 ? "Keep the momentum going!" : "Ready to start?",
+                custom: 3
               },
               {
-                title: "Avg. Accuracy", icon: Target, value: "-%", note: "Practice to improve", custom: 4
+                title: "Avg. Accuracy",
+                icon: Target,
+                value: stats ? (stats.avgAccuracy !== null ? `${stats.avgAccuracy}%` : "-%") : "…",
+                note: stats && stats.avgAccuracy !== null ? "Across completed sessions" : "Practice to improve",
+                custom: 4
               }
             ].map((stat) => (
               <motion.div key={stat.title} variants={sectionVariants} initial="hidden" animate="visible" custom={stat.custom}>
@@ -248,7 +274,7 @@ export default function DashboardPage() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-3xl font-bold">0 Days</div>
+                    <div className="text-3xl font-bold">{stats ? `${stats.streak} Day${stats.streak === 1 ? "" : "s"}` : "…"}</div>
                     <p className="text-xs text-indigo-200 mt-1">Consistency is key!</p>
                   </CardContent>
                 </Card>
