@@ -1,5 +1,5 @@
 import { Attempt } from '@prisma/client';
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 export interface QuestionData {
   question: string;
@@ -18,7 +18,7 @@ export interface GenerationContext {
   previousAttempts: Attempt[];
 }
 
-// Fallback bank used when ANTHROPIC_API_KEY is not configured or the API call fails
+// Fallback bank used when GEMINI_API_KEY is not configured or the API call fails
 const MOCK_QUESTIONS: Record<string, QuestionData[]> = {
   "IT": [
     {
@@ -697,8 +697,7 @@ const QUESTION_SCHEMA = {
     difficulty: { type: "integer", description: "Difficulty level 1-5" },
     explanation: { type: "string", description: "Why the correct answer is correct, 1-3 sentences" }
   },
-  required: ["question", "options", "correctOption", "topic", "subTopic", "difficulty", "explanation"],
-  additionalProperties: false
+  required: ["question", "options", "correctOption", "topic", "subTopic", "difficulty", "explanation"]
 } as const;
 
 const DIFFICULTY_GUIDE: Record<number, string> = {
@@ -710,29 +709,29 @@ const DIFFICULTY_GUIDE: Record<number, string> = {
 };
 
 export class AIService {
-  private client: Anthropic | null;
+  private client: GoogleGenerativeAI | null;
   private model: string;
 
   constructor() {
-    this.client = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
-    this.model = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8';
+    this.client = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
+    this.model = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
     if (!this.client) {
-      console.warn('[ai] ANTHROPIC_API_KEY not set — using the built-in fallback question bank');
+      console.warn('[ai] GEMINI_API_KEY not set — using the built-in fallback question bank');
     }
   }
 
   async generateQuestion(context: GenerationContext): Promise<QuestionData> {
     if (this.client) {
       try {
-        return await this.generateWithClaude(context);
+        return await this.generateWithGemini(context);
       } catch (error) {
-        console.error('[ai] Claude generation failed, falling back to question bank:', error);
+        console.error('[ai] Gemini generation failed, falling back to question bank:', error);
       }
     }
     return this.pickFromBank(context);
   }
 
-  private async generateWithClaude(context: GenerationContext): Promise<QuestionData> {
+  private async generateWithGemini(context: GenerationContext): Promise<QuestionData> {
     const previousQuestions = context.previousAttempts
       .map(a => {
         try { return JSON.parse(a.questionContent as string).question as string; }
@@ -753,27 +752,30 @@ export class AIService {
       `Generate one fresh multiple-choice question now.`
     ].join('\n\n');
 
-    const response = await this.client!.messages.create({
+    const systemInstruction =
+      "You are an expert interviewer generating multiple-choice questions for a mock interview platform. " +
+      "Write original, specific, professionally relevant questions — never generic trivia. " +
+      "Exactly one option is correct; the three distractors must be plausible but clearly wrong to someone who knows the material. " +
+      "Randomize which letter holds the correct answer. " +
+      "The difficulty must genuinely match the requested level: level 5 questions should challenge a senior specialist, level 1 should suit a newcomer.";
+
+    const model = this.client!.getGenerativeModel({
       model: this.model,
-      max_tokens: 2048,
-      system:
-        "You are an expert interviewer generating multiple-choice questions for a mock interview platform. " +
-        "Write original, specific, professionally relevant questions — never generic trivia. " +
-        "Exactly one option is correct; the three distractors must be plausible but clearly wrong to someone who knows the material. " +
-        "Randomize which letter holds the correct answer. " +
-        "The difficulty must genuinely match the requested level: level 5 questions should challenge a senior specialist, level 1 should suit a newcomer.",
-      messages: [{ role: "user", content: userPrompt }],
-      output_config: {
-        format: { type: "json_schema", schema: QUESTION_SCHEMA as unknown as Record<string, unknown> }
+      systemInstruction: systemInstruction,
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: QUESTION_SCHEMA as any,
       }
-    } as Anthropic.MessageCreateParamsNonStreaming);
+    });
 
-    const textBlock = response.content.find(
-      (b): b is Anthropic.TextBlock => b.type === "text"
-    );
-    if (!textBlock) throw new Error("No text block in model response");
+    const response = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: userPrompt }] }]
+    });
 
-    const data = JSON.parse(textBlock.text) as QuestionData;
+    const responseText = response.response.text();
+    if (!responseText) throw new Error("Empty response from Gemini API");
+
+    const data = JSON.parse(responseText) as QuestionData;
 
     // Validate the essentials before trusting the payload
     if (!data.question || !Array.isArray(data.options) || data.options.length !== 4) {

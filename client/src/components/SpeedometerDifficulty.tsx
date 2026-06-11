@@ -40,7 +40,7 @@ const SpeedometerDifficulty = ({ value, onChange, className }: SpeedometerDiffic
     if (!mounted) return <div className="h-64 flex items-center justify-center text-slate-400 animate-pulse">Loading Gauge...</div>
 
     return (
-        <div className={cn("flex flex-col items-center gap-4 py-8 px-4 bg-slate-50/50 rounded-3xl border border-slate-100 shadow-inner w-full max-w-sm mx-auto", className)}>
+        <div className={cn("flex flex-col items-center gap-4 py-8 px-4 bg-white/[0.03] rounded-3xl border border-white/10 shadow-inner w-full max-w-sm mx-auto", className)}>
             <div className="relative w-full max-w-[280px] aspect-[1.6/1] flex items-center justify-center group">
                 <svg viewBox="0 0 200 120" className="w-full h-full drop-shadow-sm">
                     <defs>
@@ -55,7 +55,7 @@ const SpeedometerDifficulty = ({ value, onChange, className }: SpeedometerDiffic
                     <path
                         d="M 20 100 A 80 80 0 0 1 180 100"
                         fill="none"
-                        stroke="#e2e8f0"
+                        stroke="rgba(255,255,255,0.12)"
                         strokeWidth="10"
                         strokeLinecap="round"
                     />
@@ -78,12 +78,12 @@ const SpeedometerDifficulty = ({ value, onChange, className }: SpeedometerDiffic
                 >
                     <div
                         className="w-1.5 h-16 rounded-full shadow-lg relative"
-                        style={{ backgroundColor: '#1e293b' }}
+                        style={{ backgroundColor: '#e2e8f0' }}
                     >
-                        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-2 h-2 bg-white/20 rounded-full" />
+                        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-900/20 rounded-full" />
                     </div>
-                    <div className="w-8 h-8 bg-slate-900 rounded-full border-[3px] border-white shadow-xl z-10 -mt-3 flex items-center justify-center">
-                        <div className="w-2 h-2 bg-white rounded-full animate-pulse" />
+                    <div className="w-8 h-8 bg-white rounded-full border-[3px] border-slate-900 shadow-xl z-10 -mt-3 flex items-center justify-center">
+                        <div className="w-2 h-2 bg-slate-900 rounded-full animate-pulse" />
                     </div>
                 </motion.div>
 
