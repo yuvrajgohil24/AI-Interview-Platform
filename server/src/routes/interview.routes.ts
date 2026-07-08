@@ -50,7 +50,7 @@ router.post('/start', authenticate, async (req: any, res) => {
       data: {
         userId: req.userId,
         domain,
-        difficulty,
+        difficulty: difficulty.toString(),
         targetQuestionCount: questionCount || 15,
         timeLimit: duration || 30,
         status: "STARTED"
@@ -59,6 +59,19 @@ router.post('/start', authenticate, async (req: any, res) => {
     res.json({ sessionId: session.id });
   } catch (error) {
     res.status(500).json({ error: "Failed to start session" });
+  }
+});
+
+router.get('/sessions', authenticate, async (req: any, res) => {
+  try {
+    const sessions = await prisma.session.findMany({
+      where: { userId: req.userId },
+      include: { attempts: true },
+      orderBy: { startTime: 'desc' }
+    });
+    res.json(sessions);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch sessions" });
   }
 });
 
