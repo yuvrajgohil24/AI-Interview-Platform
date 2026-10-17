@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useParams } from "next/navigation"
 import { motion, type Variants } from "framer-motion"
 import api from "@/lib/api"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -40,21 +40,33 @@ const sectionVariants: Variants = {
     })
 }
 
-export default function ReportPage({ params }: { params: { sessionId: string } }) {
+export default function ReportPage() {
     const router = useRouter()
+    const { sessionId } = useParams<{ sessionId: string }>()
     const [data, setData] = useState<any>(null)
+    const [failed, setFailed] = useState(false)
 
     useEffect(() => {
         const fetchReport = async () => {
             try {
-                const res = await api.get(`/interview/${params.sessionId}/report`)
+                const res = await api.get(`/interview/${sessionId}/report`)
                 setData(res.data)
             } catch (error) {
                 console.error(error)
+                setFailed(true)
             }
         }
         fetchReport()
-    }, [params.sessionId])
+    }, [sessionId])
+
+    if (failed) {
+        return (
+            <div className="flex flex-col gap-4 justify-center items-center h-screen p-6 text-center">
+                <p className="text-lg font-medium text-slate-700" role="alert">We couldn&apos;t load this report.</p>
+                <Button onClick={() => router.push("/dashboard")}>Back to dashboard</Button>
+            </div>
+        )
+    }
 
     if (!data) {
         return (
@@ -226,10 +238,16 @@ export default function ReportPage({ params }: { params: { sessionId: string } }
                                                         <p className="text-slate-800">{item.userAnswer || "Skipped / None"}</p>
                                                     </div>
                                                     <div className="p-3 bg-green-50 border border-green-100 rounded-md">
-                                                        <p className="text-xs font-bold text-green-800 uppercase mb-1">Correct Answer</p>
+                                                        <p className="text-xs font-bold text-green-800 uppercase mb-1">{item.score != null ? "Key Points" : "Correct Answer"}</p>
                                                         <p className="text-slate-800">{item.correctAnswer}</p>
                                                     </div>
                                                 </div>
+                                                {item.score != null && (
+                                                    <div className="p-3 bg-amber-50 border border-amber-100 rounded-md">
+                                                        <p className="text-xs font-bold text-amber-800 uppercase mb-1">AI Grade: {item.score}/10</p>
+                                                        <p className="text-slate-800">{item.feedback}</p>
+                                                    </div>
+                                                )}
                                                 <div className="p-4 bg-blue-50 border border-blue-100 rounded-md mt-2">
                                                     <div className="flex items-center gap-2 mb-2 text-blue-800 font-bold text-sm">
                                                         <Zap className="w-4 h-4" /> AI Explanation

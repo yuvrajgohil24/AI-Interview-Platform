@@ -14,29 +14,34 @@ model User {
   password  String
   createdAt DateTime  @default(now())
   sessions  Session[]
+  refreshTokens RefreshToken[]
 }
 
 model Session {
   id        String    @id @default(uuid())
   userId    String
-  user      User      @relation(fields: [userId], references: [id])
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   domain    String
+  mode      String    @default("MCQ") // MCQ or OPEN (free-text answers graded by AI)
   difficulty String // Easy, Medium, Hard
   targetQuestionCount Int @default(15)
   timeLimit Int      @default(30) // Minutes
   lifelineUsed Boolean @default(false)
+  questionServedAt DateTime? // when the pending question was first served; server-side clock for per-question timing
   currentQuestion String? // JSON of the in-flight question (kept server-side so the answer never reaches the client)
   status    String    @default("STARTED") // STARTED, COMPLETED, ABANDONED
   startTime DateTime  @default(now())
   endTime   DateTime?
   attempts  Attempt[]
   score     Float?    // Final calculated score
+
+  @@index([userId, startTime])
 }
 
 model Attempt {
   id              String   @id @default(uuid())
   sessionId       String
-  session         Session  @relation(fields: [sessionId], references: [id])
+  session         Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   topic           String
   subTopic        String?
   questionContent String   // Stored as JSON string (question, options, correct answer)
@@ -45,5 +50,27 @@ model Attempt {
   isCorrect       Boolean
   skipped         Boolean  @default(false)
   timeTaken       Int      // Seconds spent
+  answerText      String?  // Free-text answer (OPEN mode)
+  score           Int?     // AI grade 0-10 (OPEN mode)
+  feedback        String?  // AI feedback on the answer (OPEN mode)
   createdAt       DateTime @default(now())
+
+  @@index([sessionId, createdAt])
+}
+
+// Opaque refresh tokens (stored hashed). Each login starts a "family"; every refresh
+// rotates to a new token in the same family, and reuse of an old one revokes the family.
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  familyId  String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  rotatedAt DateTime? // set when replaced by a newer token in the family
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([familyId])
 }

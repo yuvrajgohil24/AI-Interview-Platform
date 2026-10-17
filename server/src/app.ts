@@ -1,26 +1,62 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import { prisma } from './lib/prisma';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
+import rateLimit from 'express-rate-limit';
+import authRoutes from './routes/auth.routes';
+import interviewRoutes from './routes/interview.routes';
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-app.use(cors());
-app.use(express.json());
+const allowedOrigins = (process.env.CLIENT_ORIGIN || 'http://localhost:3000')
+  .split(',')
+  .map(o => o.trim());
+
+app.use(helmet());
+app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.use(cookieParser());
+app.use(express.json({ limit: '10kb' }));
 
 // Basic health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date() });
 });
 
-import authRoutes from './routes/auth.routes';
-import interviewRoutes from './routes/interview.routes';
+// Brute-force protection on credential endpoints (the session endpoints below are not throttled this hard)
+const credentialLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts, please try again later' }
+});
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later' }
+});
 
+app.use('/api/auth/login', credentialLimiter);
+app.use('/api/auth/signup', credentialLimiter);
+app.use('/api/auth/refresh', refreshLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/interview', interviewRoutes);
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+// Last-resort error handler (malformed JSON, unexpected throws)
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON' });
+  console.error(err);
+  res.status(500).json({ error: 'Internal server error' });
 });
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}
 
 export { app };

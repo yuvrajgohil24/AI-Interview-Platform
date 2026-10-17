@@ -53,6 +53,8 @@ export default function DashboardPage() {
 
   // Config state
   const [domain, setDomain] = useState("IT")
+  const [mode, setMode] = useState("MCQ")
+  const [startError, setStartError] = useState("")
   const [difficulty, setDifficulty] = useState(3)
   const [questionCount, setQuestionCount] = useState("15")
   const [duration, setDuration] = useState("30")
@@ -61,25 +63,18 @@ export default function DashboardPage() {
   const [fetchingHistory, setFetchingHistory] = useState(true)
 
   useEffect(() => {
-    const userData = localStorage.getItem("user")
-    const token = localStorage.getItem("token")
-    if (!userData || !token) {
-      router.push("/login")
-      return
-    }
-    setUser(JSON.parse(userData))
-
-    // Fetch user sessions
-    api.get('/interview/sessions')
+    // The session cookie is httpOnly, so ask the API who we are (a 401 redirects to /login)
+    api.get('/auth/me')
       .then(res => {
-        setSessions(res.data || [])
+        setUser(res.data.user)
+
+        // Fetch user sessions
+        return api.get('/interview/sessions')
+          .then(r => setSessions(r.data || []))
+          .catch(err => console.error("Failed to load session history", err))
+          .finally(() => setFetchingHistory(false))
       })
-      .catch(err => {
-        console.error("Failed to load session history", err)
-      })
-      .finally(() => {
-        setFetchingHistory(false)
-      })
+      .catch(() => router.push("/login"))
   }, [router])
 
   // Load real session stats for the cards
@@ -100,17 +95,19 @@ export default function DashboardPage() {
 
   const startInterview = async (config?: { domain: string, difficulty: number, questionCount: number, duration: number }) => {
     setLoading(true)
+    setStartError("")
     try {
       const res = await api.post('/interview/start', {
         domain: config?.domain ?? domain,
+        mode,
         difficulty: (config?.difficulty ?? difficulty).toString(),
         questionCount: config?.questionCount ?? parseInt(questionCount),
         duration: config?.duration ?? parseInt(duration)
       })
       router.push(`/interview/${res.data.sessionId}`)
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to start", error)
-      alert("Failed to start interview session")
+      setStartError(error?.response?.data?.error || "Failed to start interview session")
     } finally {
       setLoading(false)
     }
@@ -174,9 +171,8 @@ export default function DashboardPage() {
         </div>
         <div className="flex items-center gap-4">
           <span className="text-sm font-semibold text-slate-600 hidden sm:inline">Welcome, <span className="text-slate-900">{user.name}</span></span>
-          <Button variant="ghost" size="sm" className="hover:bg-rose-50 hover:text-rose-600 font-bold px-4 py-2 rounded-xl transition-colors" onClick={() => {
-            localStorage.removeItem("token")
-            localStorage.removeItem("user")
+          <Button variant="ghost" size="sm" className="hover:bg-rose-50 hover:text-rose-600 font-bold px-4 py-2 rounded-xl transition-colors" onClick={async () => {
+            try { await api.post('/auth/logout') } catch (e) { console.error(e) }
             router.push("/login")
           }}>
             <LogOut className="h-4 w-4 mr-2" /> Logout
@@ -263,6 +259,20 @@ export default function DashboardPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
                   {/* Left Side: Selects */}
                   <div className="space-y-6 bg-slate-50/60 p-6 rounded-3xl border border-slate-100/80 shadow-inner">
+                    <div className="space-y-2.5">
+                      <Label className="text-slate-700 font-extrabold text-sm">Question Format</Label>
+                      <Select value={mode} onValueChange={setMode}>
+                        <SelectTrigger className="h-13 bg-white border-slate-200 text-base font-bold shadow-xs rounded-2xl focus:ring-2 focus:ring-indigo-500">
+                          <SelectValue placeholder="Select format" />
+                        </SelectTrigger>
+                        <SelectContent className="rounded-2xl font-bold">
+                          <SelectItem value="MCQ">Multiple choice</SelectItem>
+                          <SelectItem value="OPEN">Written answers (AI graded)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {startError && <p role="alert" className="text-sm font-semibold text-rose-600">{startError}</p>}
+                    </div>
+
                     <div className="space-y-2.5">
                       <Label className="text-slate-700 font-extrabold text-sm flex items-center justify-between">
                         <span>Interview Domain</span>
@@ -481,8 +491,8 @@ export default function DashboardPage() {
                       🏆
                     </div>
                     <div>
-                      <div className="font-extrabold text-sm text-slate-900">Unlocked: "First Steps"</div>
-                      <p className="text-xs font-semibold text-slate-500 mt-0.5">Complete 5 more sessions to unlock "Focus Master" badge.</p>
+                      <div className="font-extrabold text-sm text-slate-900">Unlocked: &quot;First Steps&quot;</div>
+                      <p className="text-xs font-semibold text-slate-500 mt-0.5">Complete 5 more sessions to unlock &quot;Focus Master&quot; badge.</p>
                     </div>
                   </div>
 

@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState, useCallback } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useParams } from "next/navigation"
 import { motion, AnimatePresence } from "framer-motion"
 import api from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -9,22 +9,24 @@ import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Clock, AlertCircle, Zap, CheckCircle2, Loader2 } from "lucide-react"
 
-export default function InterviewPage({ params }: { params: { sessionId: string } }) {
+export default function InterviewPage() {
     const router = useRouter()
-    const { sessionId } = params
+    const { sessionId } = useParams<{ sessionId: string }>()
 
     const [loading, setLoading] = useState(true)
     const [questionData, setQuestionData] = useState<any>(null)
     const [context, setContext] = useState<any>(null)
     const [selectedOption, setSelectedOption] = useState<string | null>(null)
+    const [answerText, setAnswerText] = useState("")
     const [timeLeft, setTimeLeft] = useState(60)
     const [isSubmitting, setIsSubmitting] = useState(false)
 
     // Lifeline state — available once per session, any time (skipping with it never triggers focus mode)
     const [lifelineUsed, setLifelineUsed] = useState(false) // from API context
 
-    const fetchQuestion = useCallback(async () => {
-        setLoading(true)
+    const [error, setError] = useState<string | null>(null)
+
+    const loadQuestion = useCallback(async () => {
         try {
             const res = await api.get(`/interview/${sessionId}/next`)
             // Check for completion (question count reached or session time expired)
@@ -38,62 +40,87 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
             setLifelineUsed(res.data.context?.lifelineUsed || false)
 
             setSelectedOption(null)
-            setTimeLeft(60) // Reset timer
-        } catch (error) {
-            console.error("Failed to fetch next question", error)
+            setAnswerText("")
+            // The server owns the clock, so a refresh can't reset the question timer
+            setTimeLeft(res.data.context?.questionTimeLeft ?? 60)
+        } catch (err: any) {
+            console.error("Failed to fetch next question", err)
+            if (err?.response?.status === 404) router.push("/dashboard")
+            else setError(err?.response?.data?.error || "Couldn't load your next question.")
         } finally {
             setLoading(false)
         }
     }, [sessionId, router])
 
-    useEffect(() => {
-        fetchQuestion()
-    }, [fetchQuestion])
+    // For event handlers: show the loading state, then load
+    const fetchQuestion = useCallback(() => {
+        setLoading(true)
+        setError(null)
+        return loadQuestion()
+    }, [loadQuestion])
 
-    // Timer — one tick per second; the auto-skip runs as an effect, not inside a state updater
     useEffect(() => {
-        if (loading || isSubmitting) return
-        if (timeLeft <= 0) {
-            handleSkip() // Auto skip when time runs out
-            return
+        // Initial data fetch; state is only set after the request resolves
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        loadQuestion()
+    }, [loadQuestion])
+
+    // 409 means the session ended (time/count) or the answer was already recorded — move on
+    const handleSubmitError = async (err: any) => {
+        if (err?.response?.status === 409) {
+            await fetchQuestion()
+        } else {
+            console.error(err)
+            setError(err?.response?.data?.error || "Couldn't submit your answer. Please try again.")
         }
-        const tick = setTimeout(() => setTimeLeft(prev => prev - 1), 1000)
-        return () => clearTimeout(tick)
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [timeLeft, loading, isSubmitting])
+    }
+
+    const isOpen = questionData?.type === "OPEN"
+    const canSubmit = isOpen ? answerText.trim().length > 0 : !!selectedOption
 
     const handleSubmit = async () => {
-        if (!selectedOption) return
+        if (!canSubmit || isSubmitting) return
         setIsSubmitting(true)
         try {
-            await api.post(`/interview/${sessionId}/submit`, {
-                selectedOption,
-                timeTaken: 60 - timeLeft,
-                skipped: false
-            })
+            await api.post(`/interview/${sessionId}/submit`, isOpen
+                ? { answerText: answerText.trim(), skipped: false }
+                : { selectedOption, skipped: false })
             await fetchQuestion()
-        } catch (error) {
-            console.error(error)
+        } catch (err) {
+            await handleSubmitError(err)
         } finally {
             setIsSubmitting(false)
         }
     }
 
     const handleSkip = async () => {
+        if (isSubmitting) return
         setIsSubmitting(true)
         try {
             await api.post(`/interview/${sessionId}/submit`, {
                 selectedOption: null,
-                timeTaken: 60 - timeLeft,
                 skipped: true
             })
             await fetchQuestion()
-        } catch (error) {
-            console.error(error)
+        } catch (err) {
+            await handleSubmitError(err)
         } finally {
             setIsSubmitting(false)
         }
     }
+
+    // Timer — one tick per second; the auto-skip runs as an effect, not inside a state updater
+    useEffect(() => {
+        if (loading || isSubmitting) return
+        if (timeLeft <= 0) {
+            // Auto skip when time runs out (deferred so the effect itself doesn't set state)
+            const expire = setTimeout(() => handleSkip(), 0)
+            return () => clearTimeout(expire)
+        }
+        const tick = setTimeout(() => setTimeLeft(prev => prev - 1), 1000)
+        return () => clearTimeout(tick)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [timeLeft, loading, isSubmitting])
 
     const handleLifeline = async () => {
         if (!confirm("Use your one-time lifeline to skip this question without triggering Focus Mode?")) return
@@ -101,11 +128,25 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
         try {
             await api.post(`/interview/${sessionId}/lifeline/skip`)
             await fetchQuestion() // Refresh (will get new question)
-        } catch (err) {
-            alert("Failed to use lifeline")
+        } catch (err: any) {
+            setError(err?.response?.data?.error || "Failed to use lifeline")
         } finally {
             setIsSubmitting(false)
         }
+    }
+
+    // Fatal load error with nothing on screen: offer a retry instead of spinning forever
+    if (error && !questionData) {
+        return (
+            <div className="flex flex-col gap-4 justify-center items-center h-screen bg-slate-950 text-white p-6 text-center">
+                <AlertCircle className="w-10 h-10 text-red-400" />
+                <p className="text-lg font-medium text-slate-200" role="alert">{error}</p>
+                <div className="flex gap-3">
+                    <Button onClick={fetchQuestion}>Try again</Button>
+                    <Button variant="outline" className="text-slate-900" onClick={() => router.push("/dashboard")}>Back to dashboard</Button>
+                </div>
+            </div>
+        )
     }
 
     if ((loading && !questionData) || !context) {
@@ -171,7 +212,7 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
                             }`}
                         >
                             <Clock className="w-5 h-5" />
-                            00:{timeLeft < 10 ? `0${timeLeft}` : timeLeft}
+                            {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, "0")}
                         </motion.div>
                     </div>
                     {/* Progress Bar */}
@@ -187,6 +228,13 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
             </motion.div>
 
             <div className="relative flex-1 flex flex-col items-center p-4 md:p-8 max-w-4xl mx-auto w-full">
+                {error && (
+                    <div role="alert" className="w-full mb-6 bg-red-50 border border-red-200 text-red-800 p-4 rounded-lg flex items-center justify-between gap-3">
+                        <span className="text-sm font-medium">{error}</span>
+                        <Button size="sm" variant="outline" onClick={fetchQuestion}>Reload question</Button>
+                    </div>
+                )}
+
                 {/* Context Awareness Banner */}
                 <AnimatePresence>
                     {context?.isFocusedMode && (
@@ -225,7 +273,23 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
                             </CardHeader>
 
                             <CardContent className="flex-1 p-6 space-y-4">
-                                <div className="grid grid-cols-1 gap-3">
+                                {isOpen && (
+                                    <div className="space-y-2">
+                                        <label htmlFor="answer" className="text-sm font-semibold text-slate-600">Your answer</label>
+                                        <textarea
+                                            id="answer"
+                                            value={answerText}
+                                            onChange={(e) => setAnswerText(e.target.value)}
+                                            maxLength={2000}
+                                            rows={9}
+                                            disabled={isSubmitting}
+                                            placeholder="Explain your answer in your own words. Cover the key concepts, trade-offs, and an example if you can."
+                                            className="w-full rounded-xl border-2 border-slate-100 bg-white p-4 text-base text-slate-800 focus:border-primary focus:outline-none"
+                                        />
+                                        <p className="text-xs text-slate-400 text-right">{answerText.length} / 2000</p>
+                                    </div>
+                                )}
+                                <div className={isOpen ? "hidden" : "grid grid-cols-1 gap-3"} role="radiogroup" aria-label="Answer options">
                                     {questionData?.options.map((option: string, idx: number) => {
                                         const optionLabel = ["A", "B", "C", "D"][idx];
                                         const isSelected = selectedOption === optionLabel;
@@ -237,7 +301,16 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
                                                 transition={{ duration: 0.35, delay: 0.1 + idx * 0.07 }}
                                                 whileHover={{ scale: 1.01 }}
                                                 whileTap={{ scale: 0.99 }}
+                                                role="radio"
+                                                aria-checked={isSelected}
+                                                tabIndex={0}
                                                 onClick={() => setSelectedOption(optionLabel)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === " " || e.key === "Enter") {
+                                                        e.preventDefault()
+                                                        setSelectedOption(optionLabel)
+                                                    }
+                                                }}
                                                 className={`
                           p-5 rounded-xl border-2 cursor-pointer transition-colors duration-200 group relative
                           ${isSelected
@@ -272,7 +345,7 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
 
                             <CardFooter className="flex justify-between border-t p-6 bg-slate-50/30">
                                 <div className="flex items-center gap-2">
-                                    <Button variant="ghost" size="lg" className="text-slate-500 hover:text-slate-700" onClick={() => handleSkip()}>
+                                    <Button variant="ghost" size="lg" className="text-slate-500 hover:text-slate-700" disabled={isSubmitting} onClick={() => handleSkip()}>
                                         Skip Question
                                     </Button>
                                     {!lifelineUsed && (
@@ -288,8 +361,8 @@ export default function InterviewPage({ params }: { params: { sessionId: string 
                                         </Button>
                                     )}
                                 </div>
-                                <Button size="lg" className="min-w-[150px] text-lg shadow-lg hover:shadow-xl hover:translate-y-[-1px] transition-all bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500" onClick={handleSubmit} disabled={!selectedOption || isSubmitting}>
-                                    {isSubmitting ? "Submitting..." : "Submit Answer"}
+                                <Button size="lg" className="min-w-[150px] text-lg shadow-lg hover:shadow-xl hover:translate-y-[-1px] transition-all bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500" onClick={handleSubmit} disabled={!canSubmit || isSubmitting}>
+                                    {isSubmitting ? (isOpen ? "Grading..." : "Submitting...") : "Submit Answer"}
                                 </Button>
                             </CardFooter>
                         </Card>
