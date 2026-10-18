@@ -55,9 +55,10 @@ const difficultyMeta: Record<number, { title: string, subtitle: string, duration
 }
 
 const SpeedometerDifficulty = ({ value, onChange, className }: SpeedometerDifficultyProps) => {
-    // false during SSR/hydration, true on the client afterwards
-    const mounted = React.useSyncExternalStore(() => () => {}, () => true, () => false)
-    const [hoveredValue, setHoveredValue] = React.useState<number | null>(null)
+    // Detect client mount to avoid SSR mismatches
+    const [mounted, setMounted] = React.useState(false);
+    React.useEffect(() => setMounted(true), []);
+    const [hoveredValue, setHoveredValue] = React.useState<number | null>(null);
 
     const activeVal = hoveredValue !== null ? hoveredValue : value
     const meta = difficultyMeta[activeVal] || difficultyMeta[3]
