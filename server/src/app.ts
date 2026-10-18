@@ -15,14 +15,10 @@ app.set('trust proxy', 1);
 
 const allowedOrigins = (process.env.CLIENT_ORIGIN || 'http://localhost:3000')
   .split(',')
-  .map(o => o.trim());
+  .map(o => o.trim().replace(/\/+$/, ''));
 
-// cors() MUST come before helmet() so that OPTIONS preflight responses
-// carry the correct Access-Control-Allow-Origin header.
+// cors() handles all HTTP methods (including OPTIONS preflight)
 app.use(cors({ origin: allowedOrigins, credentials: true }));
-
-// Respond to all OPTIONS preflight requests immediately before any other middleware
-app.options('*', cors({ origin: allowedOrigins, credentials: true }));
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cookieParser());
