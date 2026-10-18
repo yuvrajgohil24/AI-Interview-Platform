@@ -5,8 +5,9 @@
   "main": "app.ts",
   "scripts": {
     "dev": "nodemon src/app.ts",
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "start": "node dist/app.js",
+    "db:push": "prisma db push",
     "test": "vitest run"
   },
   "keywords": [],
